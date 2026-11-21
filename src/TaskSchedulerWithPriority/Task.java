@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 public class Task {
-    int id;
+    String id;
     int priority;
     Map<String, String> attributes;
     List<Task> dependencies;
