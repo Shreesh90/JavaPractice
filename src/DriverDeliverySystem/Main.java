@@ -29,7 +29,7 @@ public class Main {
         rates.recordDelivery("b", "d1", 3600, 9000);
         rates.recordDelivery("c", "d1", 7200, 8100);
         rates.recordDelivery("a", "d1", 0, 5400);
-        print("worked example", "67.50", rates.getTotalCost().toPlainString());
+        print("worked example", "72.50", rates.getTotalCost().toPlainString()); // Part 5a: b is split at 7200
 
         Driver d1 = rates.drivers.get("d1");
         print("rate before change", "2000", String.valueOf(d1.getRateAt(7199)));

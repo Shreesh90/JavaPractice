@@ -36,9 +36,7 @@ public class DriverDeliverySystem {
         if (startTime >= endTime) {
             throw new IllegalArgumentException("startTime must be before endTime");
         }
-        long deliveryDuration = endTime - startTime;
-        long driverRate = d.getRateAt(startTime) ;
-        long driverCost = deliveryDuration*driverRate;
+        long driverCost = d.costFor(startTime, endTime);
 
         Delivery del = new Delivery(startTime, endTime, driverCost, deliveryId);
         deliveryIds.add(deliveryId);
@@ -75,5 +73,36 @@ public class DriverDeliverySystem {
     public BigDecimal getTotalCostUnpaid() {
         return BigDecimal.valueOf(totalUnpaidCost)
                 .divide(BigDecimal.valueOf(360000), 2, RoundingMode.HALF_UP);
+    }
+
+    private static final long WINDOW_SECONDS = 86_400;
+
+    private record Event(long time, int delta, String driverId) {}
+
+    public int maxSimultaneousDriversInPast24Hours(long now) {
+        long windowStart = now - WINDOW_SECONDS;
+        List<Event> events = new ArrayList<>();
+        for (Driver driver : drivers.values()) {
+            for (Delivery d : driver.deliveries) {
+                if (d.endTime() <= windowStart || d.startTime() > now) continue;
+                events.add(new Event(Math.max(d.startTime(), windowStart), 1, driver.driverId));
+                events.add(new Event(d.endTime(), -1, driver.driverId));
+            }
+        }
+        // End before start at the same time: [s, e) intervals touching at T don't overlap
+        events.sort(Comparator.comparingLong(Event::time).thenComparingInt(Event::delta));
+
+        Map<String, Integer> activePerDriver = new HashMap<>();
+        int active = 0;
+        int max = 0;
+        for (Event e : events) {
+            int count = activePerDriver.merge(e.driverId(), e.delta(), Integer::sum);
+            if (e.delta() == 1 && count == 1) {
+                max = Math.max(max, ++active);
+            } else if (e.delta() == -1 && count == 0) {
+                active--;
+            }
+        }
+        return max;
     }
 }

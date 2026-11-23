@@ -2,6 +2,7 @@ package DriverDeliverySystem;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeMap;
 
 public class Driver {
@@ -26,6 +27,19 @@ public class Driver {
 
     public long getRateAt(long time) {
         return driverRates.floorEntry(time).getValue();
+    }
+
+    // Cent-seconds for [start, end), split at every rate change strictly inside it
+    public long costFor(long start, long end) {
+        long cost = 0;
+        long cursor = start;
+        long rate = getRateAt(start);
+        for (Map.Entry<Long, Long> change : driverRates.subMap(start, false, end, false).entrySet()) {
+            cost += (change.getKey() - cursor) * rate;
+            cursor = change.getKey();
+            rate = change.getValue();
+        }
+        return cost + (end - cursor) * rate;
     }
 
 }
