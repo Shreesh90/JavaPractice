@@ -1,26 +1,32 @@
 package Spreadsheet;
 
-public interface Cell {
-    String getId();
+import java.util.Objects;
 
-    int getRow();
+public class Cell {
+    private final CellRef ref;
+    private final String raw;
 
-    int getColumn();
+    public Cell(CellRef ref, String raw) {
+        Objects.requireNonNull(ref);
+        Objects.requireNonNull(raw);
 
-    // extra added
-    static void validateId(String id) {
-        if (id == null || !id.matches("[A-Z][1-9][0-9]*")) {
-            throw new IllegalArgumentException("Invalid cell id: " + id);
-        }
+        this.ref = ref;
+        this.raw = raw;
     }
 
-    static int rowOf(String id) {
-        validateId(id);
-        return Integer.parseInt(id.substring(1)) - 1;
+    public String getId() {
+        return ref.toId();
     }
 
-    static int columnOf(String id) {
-        validateId(id);
-        return id.charAt(0) - 'A';
+    public int getRow() {
+        return ref.row();
+    }
+
+    public int getColumn() {
+        return ref.col();
+    }
+
+    public String getRaw() {
+        return raw;
     }
 }

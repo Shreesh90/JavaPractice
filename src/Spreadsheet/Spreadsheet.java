@@ -1,13 +1,17 @@
 package Spreadsheet;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
+import static Spreadsheet.Utils.apply;
+import static Spreadsheet.Utils.check;
+import static Spreadsheet.Utils.checkRaw;
+import static Spreadsheet.Utils.isSumCall;
+import static Spreadsheet.Utils.sumArguments;
 
 public class Spreadsheet {
     private static final int COLUMNS = 26;
 
     private final int rows;
     private final Cell[][] cells;
+    private final SumFunction sumFunction = new SumFunction(this::computedAt);
 
     public Spreadsheet(int rows) {
         if (rows <= 0) {
@@ -17,15 +21,15 @@ public class Spreadsheet {
         this.cells = new Cell[rows][COLUMNS];
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < COLUMNS; c++) {
-                cells[r][c] = new StringCell(idOf(r, c), ""); // integer - string, datetime -- Cell<K>
+                cells[r][c] = new Cell(new CellRef(r, c), ""); // integer - string, datetime -- Cell<K>
             }
         }
     }
 
     public void setCell(String id, String raw) {
-        Cell cell = new StringCell(id, raw);
-        checkBounds(cell.getRow(), cell.getColumn(), id);
-        cells[cell.getRow()][cell.getColumn()] = cell;
+        CellRef ref = CellRef.parse(id);
+        checkBounds(ref);
+        cells[ref.row()][ref.col()] = new Cell(ref, raw);
     }
 
     public void resetCell(String id) {
@@ -33,11 +37,19 @@ public class Spreadsheet {
     }
 
     public String getRaw(String id) {
-        return cellAt(id).getRaw();
+        CellRef ref = CellRef.parse(id);
+        checkBounds(ref);
+        return cells[ref.row()][ref.col()].getRaw();
     }
 
     public long getComputed(String id) {
-        String raw = cellAt(id).getRaw();
+        CellRef ref = CellRef.parse(id);
+        return computedAt(ref);
+    }
+
+    private long computedAt(CellRef ref) {
+        checkBounds(ref);
+        String raw = cells[ref.row()][ref.col()].getRaw();
         if (raw.isEmpty()) {
             return 0;
         }
@@ -47,7 +59,7 @@ public class Spreadsheet {
         try {
             return Long.parseLong(raw);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Cell " + id + " is not a number or formula: " + raw);
+            throw new IllegalArgumentException("Cell " + ref + " is not a number or formula: " + raw);
         }
     }
 
@@ -60,52 +72,40 @@ public class Spreadsheet {
             expr = expr.substring(1);
         }
 
-        Deque<Long> stack = new ArrayDeque<>();
+        long sum = 0;
         StringBuilder token = new StringBuilder();
         char pendingOperator = '+';
+        int depth = 0;
         for (char ch : expr.toCharArray()) {
-            if (ch == '+' || ch == '-') {
-                pushOperand(stack, token.toString(), pendingOperator);
+            if (ch == '(') {
+                depth++;
+            } else if (ch == ')') {
+                depth--;
+            }
+            if (depth == 0 && (ch == '+' || ch == '-')) {
+                sum = apply(sum, pendingOperator, operandValue(token.toString()));
                 pendingOperator = ch;
                 token.setLength(0);
             } else {
                 token.append(ch);
             }
         }
-        pushOperand(stack, token.toString(), pendingOperator);
+        return apply(sum, pendingOperator, operandValue(token.toString()));
+    }
 
-        long result = 0;
-        while (!stack.isEmpty()) {
-            result += stack.pop();
+    private long operandValue(String token) {
+        if (isSumCall(token)) {
+            return sumFunction.evaluate(sumArguments(token));
         }
-        return result;
+        return !token.isEmpty() && Character.isDigit(token.charAt(0))
+                ? Long.parseLong(token)
+                : getComputed(token);
     }
 
-    private void pushOperand(Deque<Long> stack, String id, char operator) {
-        long value = !id.isEmpty() && Character.isDigit(id.charAt(0))
-                ? Long.parseLong(id)
-                : getComputed(id);
-        stack.push(operator == '+' ? value : -value);
-    }
-
-    private StringCell cellAt(String id) {
-        int row = Cell.rowOf(id);
-        int col = Cell.columnOf(id);
-        checkBounds(row, col, id);
-        if (cells[row][col] instanceof StringCell stringCell) {
-            return stringCell;
+    private void checkBounds(CellRef ref) {
+        if (ref.row() >= rows || ref.col() >= COLUMNS) {
+            throw new IllegalArgumentException("Cell out of range: " + ref);
         }
-        throw new IllegalStateException("Unsupported cell type at " + id);
-    }
-
-    private void checkBounds(int row, int col, String id) {
-        if (row < 0 || row >= rows || col < 0 || col >= COLUMNS) {
-            throw new IllegalArgumentException("Cell out of range: " + id);
-        }
-    }
-
-    private static String idOf(int row, int col) {
-        return (char) ('A' + col) + String.valueOf(row + 1);
     }
 
     public static void main(String[] args) {
@@ -143,15 +143,15 @@ public class Spreadsheet {
         check("D1 after replace", s.getComputed("D1"), 8);
         checkRaw("empty raw Z9", s.getRaw("Z9"), "");
         check("empty computed Z9", s.getComputed("Z9"), 0);
-    }
 
-    private static void checkRaw(String name, String actual, String expected) {
-        System.out.println((actual.equals(expected) ? "PASS " : "FAIL ") + name
-                + " -> expected \"" + expected + "\", got \"" + actual + "\"");
-    }
-
-    private static void check(String name, long actual, long expected) {
-        System.out.println((actual == expected ? "PASS " : "FAIL ") + name
-                + " -> expected " + expected + ", got " + actual);
+        Spreadsheet sumSheet = new Spreadsheet(5);
+        sumSheet.setCell("A1", "1");
+        sumSheet.setCell("B1", "2");
+        sumSheet.setCell("A2", "3");
+        sumSheet.setCell("B2", "=A1+10");
+        sumSheet.setCell("B3", "4");
+        check("SUM range with formula cell", sumSheet.getValue("=SUM(A1:B2)+B3-2"), 19);
+        sumSheet.setCell("C1", "=SUM(B2:A1,A1,-5)");
+        check("SUM reversed range, repeat cell, negative", sumSheet.getComputed("C1"), 13);
     }
 }
