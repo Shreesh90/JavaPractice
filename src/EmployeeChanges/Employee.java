@@ -14,6 +14,10 @@ public class Employee {
         this.hire = hire;
     }
 
+    public String getId() {
+        return this.eId;
+    }
+
     public LocalDate getHireDate() {
         return this.hire;
     }

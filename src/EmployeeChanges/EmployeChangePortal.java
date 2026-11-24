@@ -8,6 +8,8 @@ public class EmployeChangePortal {
     Map<String, Employee> employees = new HashMap<>();
     Map<String, Map<Field, TreeMap<LocalDate, List<ChangeEvent>>>> fieldsChangeHistory = new HashMap<>();
     Map<String, ChangeEvent> requestIdToSequence = new HashMap<>();
+    TreeMap<LocalDate, Map<String, ChangeEvent>> salaryChanges = new TreeMap<>();
+
     long globalSequence;
 
     public EmployeChangePortal() {
@@ -25,10 +27,16 @@ public class EmployeChangePortal {
         fieldsChangeHistory.computeIfAbsent(eID, k -> new HashMap<>());
 
         for(Map.Entry<Field, String> e: initialValues.entrySet()) {
+            ChangeEvent ce = new ChangeEvent(null, eID, e.getKey(), e.getValue(), date, date, ++globalSequence);
             fieldsChangeHistory.get(eID)
                     .computeIfAbsent(e.getKey(), k -> new TreeMap<>())
                     .computeIfAbsent(date, k -> new ArrayList<>())
-                    .add(new ChangeEvent(null, eID, e.getKey(), e.getValue(), date, date, ++globalSequence));
+                    .add(ce);
+            if(e.getKey().equals(Field.SALARY)) {
+                salaryChanges
+                        .computeIfAbsent(date, k -> new HashMap<>())
+                        .put(eID, ce);
+            }
         }
     }
 
@@ -55,6 +63,11 @@ public class EmployeChangePortal {
                 .computeIfAbsent(field, k -> new TreeMap<>())
                 .computeIfAbsent(effectiveDate, k -> new ArrayList<>())
                 .add(ce);
+        if(field.equals(Field.SALARY)) {
+            salaryChanges
+                    .computeIfAbsent(effectiveDate, k -> new HashMap<>())
+                    .put(eID, ce);
+        }
 
         requestIdToSequence.put(requestId,ce);
         return globalSequence;
@@ -86,6 +99,30 @@ public class EmployeChangePortal {
         }
         pending.sort(Comparator.comparing(ChangeEvent::effectiveDate).thenComparing(ChangeEvent::field));
         return pending;
+    }
+
+    // Resolve-on-read: same rule as getSnapshot, so it flips on the effective date with no job
+    public List<String> employeesWithTitle(String title, LocalDate asOf) {
+        List<String> result = new ArrayList<>();
+        for (Employee employee : employees.values()) {
+            if (asOf.isBefore(employee.getHireDate())) continue;
+            TreeMap<LocalDate, List<ChangeEvent>> titles = fieldsChangeHistory.get(employee.getId()).get(Field.TITLE);
+            if (titles != null && titles.floorEntry(asOf).getValue().getLast().value().equals(title)) {
+                result.add(employee.getId());
+            }
+        }
+        result.sort(Comparator.naturalOrder());
+        return result;
+    }
+
+    List<ChangeEvent> drainDueNotifications(LocalDate date) {
+        List<ChangeEvent> temp = new ArrayList<>();
+        for(Map.Entry<LocalDate, Map<String, ChangeEvent>> e: salaryChanges.headMap(date, true).entrySet()) {
+            Map<String, ChangeEvent> perEmployeeSalaryEvent = e.getValue() ;
+            temp.addAll(perEmployeeSalaryEvent.values().stream().toList());
+        }
+        salaryChanges.headMap(date, true).clear();
+        return temp;
     }
 
 }
