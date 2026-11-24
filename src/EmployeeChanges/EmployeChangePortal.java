@@ -6,9 +6,15 @@ import java.util.*;
 public class EmployeChangePortal {
 
     Map<String, Employee> employees = new HashMap<>();
+    // <EmployeeId, <Field, <Date, List<ChangeEvent>>>
     Map<String, Map<Field, TreeMap<LocalDate, List<ChangeEvent>>>> fieldsChangeHistory = new HashMap<>();
     Map<String, ChangeEvent> requestIdToSequence = new HashMap<>();
+    // <Date, <EmployeeID, ChangeEvent>>: stores latest salary change event in a particular date
     TreeMap<LocalDate, Map<String, ChangeEvent>> salaryChanges = new TreeMap<>();
+    // <sequence number, event>
+    Map<Long, ChangeEvent> scheduledBySeq = new HashMap<>();
+    // <cancelled seq, new sequence generated>
+    Map<Long, Long> cancelledBy = new HashMap<>();   // cancelled change's seq -> cancellation's seq
 
     long globalSequence;
 
@@ -53,7 +59,7 @@ public class EmployeChangePortal {
             else return requestIdToSequence.get(requestId).seq();
         }
         if(!employees.containsKey(eID)) throw new IllegalArgumentException("Unknown employee: " + eID);
-        if(effectiveDate.isBefore(today)) throw new IllegalArgumentException("effectiveDate is in the past: " + effectiveDate);
+        // Part 3: past dates allowed (backdated); inserted mid-timeline, resolve-on-read picks it up
         if(effectiveDate.isBefore(employees.get(eID).getHireDate()))
             throw new IllegalArgumentException("effectiveDate is before hire date: " + effectiveDate);
 
@@ -70,10 +76,68 @@ public class EmployeChangePortal {
         }
 
         requestIdToSequence.put(requestId,ce);
+        scheduledBySeq.put(ce.seq(), ce);
         return globalSequence;
     }
 
+    // Cancellation is a new event; the cancelled change stays in history
+    public long cancelChange(long revision, LocalDate today) {
+        if (today == null) throw new IllegalArgumentException("today is required");
+        ChangeEvent target = scheduledBySeq.get(revision);
+        if (target == null) throw new IllegalArgumentException("Unknown scheduled change: " + revision);
+        if (cancelledBy.containsKey(revision)) return cancelledBy.get(revision);
+        if (!target.effectiveDate().isAfter(today))
+            throw new IllegalArgumentException("Change " + revision + " already effective; record a correction");
+
+        cancelledBy.put(revision, ++globalSequence);
+            if (target.field() == Field.SALARY) refreshOutbox(target);
+        return globalSequence;
+    }
+
+    // If the cancelled change was the pending notification, fall back to the same-day winner or drop it
+    private void refreshOutbox(ChangeEvent cancelled) {
+        Map<String, ChangeEvent> due = salaryChanges.get(cancelled.effectiveDate());
+        if (due == null || !cancelled.equals(due.get(cancelled.eId()))) return;
+        List<ChangeEvent> sameDay = fieldsChangeHistory.get(cancelled.eId()).get(Field.SALARY).get(cancelled.effectiveDate());
+        Optional<ChangeEvent> winner = lastActive(sameDay);
+        if (winner.isPresent()) due.put(cancelled.eId(), winner.get());
+        else due.remove(cancelled.eId());
+        if (due.isEmpty()) salaryChanges.remove(cancelled.effectiveDate());
+    }
+
+    private Optional<ChangeEvent> lastActive(List<ChangeEvent> sameDay) {
+        return lastActive(sameDay, Long.MAX_VALUE);
+    }
+
+    // Active as known at revision `known`: recorded by then, and not cancelled by then
+    private Optional<ChangeEvent> lastActive(List<ChangeEvent> sameDay, long known) {
+        for (ChangeEvent e : sameDay.reversed()) {
+            if (e.seq() > known) continue;
+            Long cancelSeq = cancelledBy.get(e.seq());
+            if (cancelSeq == null || cancelSeq > known) return Optional.of(e);
+        }
+        return Optional.empty();
+    }
+
+    private Optional<ChangeEvent> resolve(TreeMap<LocalDate, List<ChangeEvent>> timeline, LocalDate asOf) {
+        return resolve(timeline, asOf, Long.MAX_VALUE);
+    }
+
+    // The one rule: latest date <= asOf, last active change on that date; walk back if none
+    private Optional<ChangeEvent> resolve(TreeMap<LocalDate, List<ChangeEvent>> timeline, LocalDate asOf, long known) {
+        for (List<ChangeEvent> sameDay : timeline.headMap(asOf, true).descendingMap().values()) {
+            Optional<ChangeEvent> winner = lastActive(sameDay, known);
+            if (winner.isPresent()) return winner;
+        }
+        return Optional.empty();
+    }
+
     public Map<Field, String> getSnapshot (String eID, LocalDate date) {
+        return getSnapshot(eID, date, Long.MAX_VALUE);
+    }
+
+    // Bitemporal: what the system showed for `date` using only revisions <= knownAsOfRevision
+    public Map<Field, String> getSnapshot (String eID, LocalDate date, long knownAsOfRevision) {
         if(!employees.containsKey(eID)) throw new IllegalArgumentException("Unknown employee: " + eID);
         if(date.isBefore(employees.get(eID).getHireDate()))
             throw new IllegalArgumentException("Employee " + eID + " not employed on " + date);
@@ -82,8 +146,7 @@ public class EmployeChangePortal {
         Map<Field, TreeMap<LocalDate, List<ChangeEvent>>> fieldMap = fieldsChangeHistory.get(eID);
         for(Field f: Field.values()) {
             if(!fieldMap.containsKey(f)) continue;
-            ChangeEvent event = fieldMap.get(f).floorEntry(date).getValue().getLast();
-            values.put(f, event.value());
+            resolve(fieldMap.get(f), date, knownAsOfRevision).ifPresent(event -> values.put(f, event.value()));
         }
         return values;
     }
@@ -94,7 +157,7 @@ public class EmployeChangePortal {
         List<ChangeEvent> pending = new ArrayList<>();
         for (TreeMap<LocalDate, List<ChangeEvent>> timeline : fieldsChangeHistory.get(eID).values()) {
             for (List<ChangeEvent> sameDay : timeline.tailMap(today, false).values()) {
-                pending.add(sameDay.getLast());
+                lastActive(sameDay).ifPresent(pending::add);
             }
         }
         pending.sort(Comparator.comparing(ChangeEvent::effectiveDate).thenComparing(ChangeEvent::field));
@@ -107,7 +170,7 @@ public class EmployeChangePortal {
         for (Employee employee : employees.values()) {
             if (asOf.isBefore(employee.getHireDate())) continue;
             TreeMap<LocalDate, List<ChangeEvent>> titles = fieldsChangeHistory.get(employee.getId()).get(Field.TITLE);
-            if (titles != null && titles.floorEntry(asOf).getValue().getLast().value().equals(title)) {
+            if (titles != null && resolve(titles, asOf).map(ChangeEvent::value).filter(title::equals).isPresent()) {
                 result.add(employee.getId());
             }
         }
