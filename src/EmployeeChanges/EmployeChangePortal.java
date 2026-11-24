@@ -15,7 +15,11 @@ public class EmployeChangePortal {
     }
 
     public void addEmployee(String eID, LocalDate date, Map<Field, String> initialValues) {
-        if(employees.containsKey(eID)) throw new IllegalArgumentException();
+        if (eID == null || eID.isBlank()) throw new IllegalArgumentException("employeeId cannot be blank");
+        if (date == null) throw new IllegalArgumentException("hireDate cannot be null for " + eID);
+        if (initialValues == null || initialValues.isEmpty())
+            throw new IllegalArgumentException("initialValues cannot be empty for " + eID);
+        if(employees.containsKey(eID)) throw new IllegalArgumentException("Employee already exists: " + eID);
 
         employees.put(eID, new Employee(eID, initialValues, date));
         fieldsChangeHistory.computeIfAbsent(eID, k -> new HashMap<>());
@@ -29,15 +33,21 @@ public class EmployeChangePortal {
     }
 
     public long scheduleChange(String requestId, String eID, Field field, String value, LocalDate effectiveDate, LocalDate today) {
+        if (requestId == null || field == null || effectiveDate == null || today == null)
+            throw new IllegalArgumentException("requestId, field, effectiveDate and today are required");
+        if (value == null || value.isBlank()) throw new IllegalArgumentException("value cannot be blank");
         if(requestIdToSequence.containsKey(requestId)) {
-            if(field != requestIdToSequence.get(requestId).field() ||
+            if(!eID.equals(requestIdToSequence.get(requestId).eId()) ||
+                    field != requestIdToSequence.get(requestId).field() ||
                     !value.equals(requestIdToSequence.get(requestId).value()) ||
                     !effectiveDate.equals(requestIdToSequence.get(requestId).effectiveDate())
-            ) throw new IllegalArgumentException();
+            ) throw new IllegalArgumentException("requestId reused with different payload: " + requestId);
             else return requestIdToSequence.get(requestId).seq();
         }
-        if(!employees.containsKey(eID)) throw new IllegalArgumentException();
-        if(effectiveDate.isBefore(today) || effectiveDate.isBefore(employees.get(eID).getHireDate())) throw new IllegalArgumentException();
+        if(!employees.containsKey(eID)) throw new IllegalArgumentException("Unknown employee: " + eID);
+        if(effectiveDate.isBefore(today)) throw new IllegalArgumentException("effectiveDate is in the past: " + effectiveDate);
+        if(effectiveDate.isBefore(employees.get(eID).getHireDate()))
+            throw new IllegalArgumentException("effectiveDate is before hire date: " + effectiveDate);
 
         ChangeEvent ce = new ChangeEvent(requestId, eID, field, value, effectiveDate, today, ++globalSequence);
         fieldsChangeHistory
@@ -51,8 +61,9 @@ public class EmployeChangePortal {
     }
 
     public Map<Field, String> getSnapshot (String eID, LocalDate date) {
-        if(!employees.containsKey(eID)) throw new IllegalArgumentException();
-        if(date.isBefore(employees.get(eID).getHireDate())) throw new IllegalArgumentException();
+        if(!employees.containsKey(eID)) throw new IllegalArgumentException("Unknown employee: " + eID);
+        if(date.isBefore(employees.get(eID).getHireDate()))
+            throw new IllegalArgumentException("Employee " + eID + " not employed on " + date);
 
         Map<Field, String> values = new HashMap<>();
         Map<Field, TreeMap<LocalDate, List<ChangeEvent>>> fieldMap = fieldsChangeHistory.get(eID);
@@ -62,6 +73,19 @@ public class EmployeChangePortal {
             values.put(f, event.value());
         }
         return values;
+    }
+
+    // Winning change per (field, future date): last in the same-day list
+    public List<ChangeEvent> pendingChanges(String eID, LocalDate today) {
+        if(!employees.containsKey(eID)) throw new IllegalArgumentException("Unknown employee: " + eID);
+        List<ChangeEvent> pending = new ArrayList<>();
+        for (TreeMap<LocalDate, List<ChangeEvent>> timeline : fieldsChangeHistory.get(eID).values()) {
+            for (List<ChangeEvent> sameDay : timeline.tailMap(today, false).values()) {
+                pending.add(sameDay.getLast());
+            }
+        }
+        pending.sort(Comparator.comparing(ChangeEvent::effectiveDate).thenComparing(ChangeEvent::field));
+        return pending;
     }
 
 }
