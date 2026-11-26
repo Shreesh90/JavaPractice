@@ -3,6 +3,7 @@ package ExpensePolicyRule;
 import ExpensePolicyRule.dto.Expense;
 import ExpensePolicyRule.dto.Violation;
 import ExpensePolicyRule.rules.AmountLimitRule;
+import ExpensePolicyRule.rules.CompoundRule;
 import ExpensePolicyRule.rules.GroupRule;
 import ExpensePolicyRule.rules.ProhibitedRule;
 import ExpensePolicyRule.rules.Rule;
@@ -14,6 +15,25 @@ public class Main {
         rulesWithPredicates();
         System.out.println();
         groupRules();
+        System.out.println();
+        compoundRules();
+    }
+
+    // Building blocks A and F are not reported themselves; only X, built from them, is passed to the engine
+    static void compoundRules() {
+        Rule restaurantOver75 = new AmountLimitRule("A", 7500, e -> "restaurant".equals(e.sellerType()));
+        Rule isFood = new ProhibitedRule("F", ExpenseType.FOOD);                       // "matches" = type is FOOD
+        Rule notFood = new CompoundRule("NF", CompoundRule.Op.NOT, List.of(isFood));
+        Rule x = new CompoundRule("X", CompoundRule.Op.AND, List.of(restaurantOver75, notFood));  // pricey non-meal at a restaurant
+
+        List<Expense> expenses = List.of(
+                new Expense("E1", null, null, ExpenseType.FOOD, 9000, "restaurant", "ABC"),            // A ✓, food → no
+                new Expense("E2", null, null, ExpenseType.ENTERTAINMENT, 12000, "restaurant", "ABC"),  // A ✓, not food → X
+                new Expense("E3", null, null, ExpenseType.ENTERTAINMENT, 4000, "restaurant", "ABC"));  // A ✗ → no, NF never checked
+
+        for (Violation v : new ExpenseRuleEngine().evaluateRules(List.of(x), expenses)) {
+            System.out.println(v.subjectId() + " " + v.ruleId() + " " + v.message());
+        }
     }
 
     // Trip T1 shared by Alice and Bob; E6 has no trip, so no group rule sees it
